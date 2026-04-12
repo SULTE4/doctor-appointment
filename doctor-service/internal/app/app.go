@@ -3,13 +3,15 @@ package app
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 
 	"doctor-service/internal/repository"
-	handler "doctor-service/internal/transport/http"
+	grpcHandler "doctor-service/internal/transport/grpc"
 	"doctor-service/internal/usecase"
+	doctorpb "doctor-service/proto"
 
-	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc"
 )
 
 func Run() {
@@ -20,13 +22,18 @@ func Run() {
 
 	repo := repository.New()
 	uc := usecase.New(repo)
-	h := handler.NewHandler(uc)
+	h := grpcHandler.NewHandler(uc)
 
-	r := gin.Default()
-	r.POST("/doctors", h.Create)
-	r.GET("/doctors", h.GetAll)
-	r.GET("/doctors/:id", h.GetByID)
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
+	if err != nil {
+		log.Fatalf("[FATAL] failed to listen on :%s: %v", port, err)
+	}
 
-	log.Printf("[INFO] Doctor Service starting on :%s", port)
-	r.Run(fmt.Sprintf(":%s", port))
+	server := grpc.NewServer()
+	doctorpb.RegisterDoctorServiceServer(server, h)
+
+	log.Printf("[INFO] Doctor Service gRPC listening on :%s", port)
+	if err := server.Serve(lis); err != nil {
+		log.Fatalf("[FATAL] failed to serve doctor gRPC server: %v", err)
+	}
 }
