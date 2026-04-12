@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -20,7 +21,7 @@ func New(repo AppointmentRepository, dc DoctorServiceClient) AppointmentUseCase 
 	return &appointmentUseCase{repo: repo, doctorClient: dc}
 }
 
-func (uc *appointmentUseCase) Create(title, description, doctorID string) (*model.Appointment, error) {
+func (uc *appointmentUseCase) Create(ctx context.Context, title, description, doctorID string) (*model.Appointment, error) {
 	if title == "" {
 		return nil, errors.New("title is required")
 	}
@@ -28,7 +29,7 @@ func (uc *appointmentUseCase) Create(title, description, doctorID string) (*mode
 		return nil, errors.New("doctor_id is required")
 	}
 
-	exists, err := uc.doctorClient.DoctorExists(doctorID)
+	exists, err := uc.doctorClient.DoctorExists(ctx, doctorID)
 	if err != nil {
 		log.Printf("[ERROR] Doctor Service unavailable when creating appointment for doctor %s: %v", doctorID, err)
 		return nil, fmt.Errorf("SERVICE_UNAVAILABLE: %w", err)
@@ -77,7 +78,7 @@ func (uc *appointmentUseCase) GetAll() ([]*model.Appointment, error) {
 	return appointments, nil
 }
 
-func (uc *appointmentUseCase) UpdateStatus(id string, newStatus model.Status) (*model.Appointment, error) {
+func (uc *appointmentUseCase) UpdateStatus(ctx context.Context, id string, newStatus model.Status) (*model.Appointment, error) {
 	if !newStatus.IsValid() {
 		return nil, errors.New("status must be one of: new, in_progress, done")
 	}
@@ -91,6 +92,16 @@ func (uc *appointmentUseCase) UpdateStatus(id string, newStatus model.Status) (*
 	if a.Status == model.StatusDone && newStatus == model.StatusNew {
 		log.Printf("[WARN] forbidden status transition for appointment %s: done -> new", id)
 		return nil, errors.New("FORBIDDEN_TRANSITION: cannot move from done back to new")
+	}
+
+	exists, err := uc.doctorClient.DoctorExists(ctx, a.DoctorID)
+	if err != nil {
+		log.Printf("[ERROR] Doctor Service unavailable when updating appointment %s for doctor %s: %v", id, a.DoctorID, err)
+		return nil, fmt.Errorf("SERVICE_UNAVAILABLE: %w", err)
+	}
+	if !exists {
+		log.Printf("[WARN] appointment status update rejected: doctor %s not found", a.DoctorID)
+		return nil, errors.New("DOCTOR_NOT_FOUND: doctor does not exist")
 	}
 
 	a.Status = newStatus

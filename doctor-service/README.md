@@ -1,149 +1,58 @@
-# Doctor Service
+# Doctor Service (gRPC)
 
-> Manages doctor profiles for the medical scheduling platform.
+Owns doctor profile data and exposes `DoctorService` gRPC API.
 
-## What This Service Does
-
-The Doctor Service owns and manages all doctor data. It exposes a REST API that lets clients create, retrieve, and list doctors. The Appointment Service calls this service over HTTP to verify that a doctor exists before an appointment is created or updated.
-
-## Quick Start
-
-**Prerequisites**: Go 1.21+
+## Run
 
 ```bash
 cd doctor-service
-go run .
+go run ./cmd/doctor-service
 ```
 
-The service starts on port `8080` by default. Set `DOCTOR_SERVICE_PORT` to override.
+Default port: `8080` (`DOCTOR_SERVICE_PORT`).
 
-## Folder Structure
+## RPCs
 
-```
-doctor-service/
-├── cmd/doctor-service/main.go       # Entry point — calls app.Run()
-└── internal/
-    ├── model/doctor.go              # Domain model — no framework types
-    ├── usecase/
-    │   ├── interfaces.go            # DoctorUsecase and DoctorRepository interfaces
-    │   └── usecase.go               # Business logic: validation, uniqueness, creation
-    ├── repository/repo.go           # In-memory storage implementing DoctorRepository
-    ├── transport/http/handler.go    # Thin HTTP handlers — parse, delegate, respond
-    └── app/app.go                   # Wires all layers and starts the HTTP server
-```
+Defined in `proto/doctor.proto`:
 
-**Dependency direction**: `handler` → `usecase interface` ← `repository implementation`
+1. `CreateDoctor(CreateDoctorRequest) returns (DoctorResponse)`
+2. `GetDoctor(GetDoctorRequest) returns (DoctorResponse)`
+3. `ListDoctors(ListDoctorsRequest) returns (ListDoctorsResponse)`
 
-The handler imports the usecase interface. The repository implements it. Neither the handler nor the repository knows about each other. This is Dependency Inversion in practice.
+## Business rules
 
-## API Reference
+- `full_name` required -> `InvalidArgument`
+- `email` required -> `InvalidArgument`
+- unique `email` -> `AlreadyExists`
+- doctor ID missing in get -> `InvalidArgument`
+- doctor ID not found -> `NotFound`
 
-### Create a Doctor
+## Structure
 
-```
-POST /doctors
-```
-
-**Request**
-
-```json
-{
-  "full_name": "Dr. Aisha Seitkali",
-  "specialization": "Cardiology",
-  "email": "a.seitkali@clinic.kz"
-}
+```text
+cmd/doctor-service/main.go
+internal/model
+internal/usecase
+internal/repository
+internal/transport/grpc
+internal/app
+proto/doctor.proto
+proto/doctor.pb.go
+proto/doctor_grpc.pb.go
 ```
 
-`full_name` and `email` are required. `specialization` is optional.
+Dependency flow remains:
 
-**Response `201 Created`**
+`transport/grpc` -> `usecase` (interface) <- `repository`
 
-```json
-{
-  "doctor": {
-    "id": "3f1e2a4b-...",
-    "full_name": "Dr. Aisha Seitkali",
-    "specialization": "Cardiology",
-    "email": "a.seitkali@clinic.kz"
-  }
-}
-```
-
-**Error responses**
-
-| Status | Condition |
-|--------|-----------|
-| `400 Bad Request` | Missing `full_name` or `email` |
-| `409 Conflict` | Email already registered |
-
----
-
-### Get Doctor by ID
-
-```
-GET /doctors/:id
-```
-
-**Response `200 OK`**
-
-```json
-{
-  "doctor": {
-    "id": "3f1e2a4b-...",
-    "full_name": "Dr. Aisha Seitkali",
-    "specialization": "Cardiology",
-    "email": "a.seitkali@clinic.kz"
-  }
-}
-```
-
-**Error responses**
-
-| Status | Condition |
-|--------|-----------|
-| `404 Not Found` | Doctor with the given ID does not exist |
-
----
-
-### List All Doctors
-
-```
-GET /doctors
-```
-
-**Response `200 OK`**
-
-```json
-{
-  "doctors": [
-    { "id": "...", "full_name": "...", "specialization": "...", "email": "..." }
-  ]
-}
-```
-
-## Business Rules
-
-- `full_name` is required.
-- `email` is required and must be unique across all doctors. A `409 Conflict` is returned if the email is already registered.
-- All business rules are enforced in the use case layer, not in the handler.
-
-## Configuration
-
-| Environment Variable | Default | Description |
-|----------------------|---------|-------------|
-| `DOCTOR_SERVICE_PORT` | `8080` | Port the service listens on |
-
-## curl Examples
+## Regenerate stubs
 
 ```bash
-# Create a doctor
-curl -s -X POST http://localhost:8080/doctors \
-  -H "Content-Type: application/json" \
-  -d '{"full_name":"Dr. Aisha Seitkali","specialization":"Cardiology","email":"a.seitkali@clinic.kz"}'
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+export PATH="$PATH:$(go env GOPATH)/bin"
 
-# Get a doctor by ID
-curl -s http://localhost:8080/doctors/<id>
-
-# List all doctors
-curl -s http://localhost:8080/doctors
+protoc --go_out=paths=source_relative:. \
+  --go-grpc_out=paths=source_relative:. \
+  proto/doctor.proto
 ```

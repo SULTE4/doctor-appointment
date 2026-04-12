@@ -1,45 +1,52 @@
 package client
 
 import (
+	"context"
 	"fmt"
-	"log"
-	"net/http"
 	"time"
 
 	"appointment-service/internal/usecase"
+	doctorpb "doctor-service/proto"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 type doctorServiceClient struct {
-	baseURL    string
-	httpClient *http.Client
+	client doctorpb.DoctorServiceClient
 }
 
-func NewDoctorServiceClient(baseURL string) usecase.DoctorServiceClient {
-	return &doctorServiceClient{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
-		},
-	}
-}
-
-func (c *doctorServiceClient) DoctorExists(doctorID string) (bool, error) {
-	url := fmt.Sprintf("%s/doctors/%s", c.baseURL, doctorID)
-
-	resp, err := c.httpClient.Get(url)
+func NewDoctorServiceClient(target string) (usecase.DoctorServiceClient, *grpc.ClientConn, error) {
+	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Printf("[ERROR] Doctor Service unreachable at %s: %v", url, err)
-		return false, fmt.Errorf("Doctor Service is currently unavailable: %w", err)
+		return nil, nil, fmt.Errorf("failed to connect to doctor service %s: %w", target, err)
 	}
-	defer resp.Body.Close()
 
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return true, nil
-	case http.StatusNotFound:
-		return false, nil
-	default:
-		log.Printf("[ERROR] Doctor Service unexpected status %d for doctor %s", resp.StatusCode, doctorID)
-		return false, fmt.Errorf("Doctor Service returned unexpected status %d", resp.StatusCode)
+	return &doctorServiceClient{client: doctorpb.NewDoctorServiceClient(conn)}, conn, nil
+}
+
+func (c *doctorServiceClient) DoctorExists(ctx context.Context, doctorID string) (bool, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	_, err := c.client.GetDoctor(reqCtx, &doctorpb.GetDoctorRequest{Id: doctorID})
+	if err != nil {
+		st, ok := status.FromError(err)
+		if !ok {
+			return false, fmt.Errorf("doctor lookup failed: %w", err)
+		}
+
+		switch st.Code() {
+		case codes.NotFound:
+			return false, nil
+		case codes.Unavailable, codes.DeadlineExceeded:
+			return false, fmt.Errorf("doctor service unavailable: %w", err)
+		default:
+			return false, fmt.Errorf("doctor lookup failed: %w", err)
+		}
 	}
+
+	return true, nil
 }
