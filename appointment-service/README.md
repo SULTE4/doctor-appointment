@@ -1,185 +1,73 @@
-# Appointment Service
+# Appointment Service (gRPC)
 
-> Manages appointment scheduling and enforces doctor-existence validation via the Doctor Service.
+Owns appointment data and exposes `AppointmentService` gRPC API.
+Before create/update, it validates doctor existence by calling Doctor Service gRPC `GetDoctor`.
 
-## What This Service Does
-
-The Appointment Service owns all appointment data. Before creating or updating an appointment, it calls the Doctor Service over HTTP to verify the referenced doctor exists. If the Doctor Service is unreachable, the operation is rejected with a `503 Service Unavailable` response and the failure is logged.
-
-## Quick Start
-
-**Prerequisites**: Go 1.21+, Doctor Service running on port `8080`
+## Run
 
 ```bash
 cd appointment-service
-go run .
+go run ./cmd/appointment-service
 ```
 
-The service starts on port `8081` by default.
+Default port: `8081` (`APPOINTMENT_SERVICE_PORT`)  
+Doctor target: `localhost:8080` (`DOCTOR_SERVICE_ADDR`)
 
-## Folder Structure
+## RPCs
 
-```
-appointment-service/
-├── cmd/appointment-service/main.go       # Entry point — calls app.Run()
-└── internal/
-    ├── model/appointment.go              # Domain model with Status type
-    ├── usecase/
-    │   ├── interfaces.go                 # AppointmentUseCase, AppointmentRepository, DoctorServiceClient interfaces
-    │   └── usecase.go                    # Business logic: validation, status transitions, doctor check
-    ├── repository/repo.go                # In-memory storage implementing AppointmentRepository
-    ├── client/doctorClient.go            # HTTP client implementing DoctorServiceClient
-    ├── transport/http/handler.go         # Thin HTTP handlers — parse, delegate, respond
-    └── app/app.go                        # Wires all layers and starts the HTTP server
-```
+Defined in `proto/appointment.proto`:
 
-**Dependency direction**: `handler` → `usecase interface` ← `repository implementation`
-                                                          ← `doctor client implementation`
+1. `CreateAppointment(CreateAppointmentRequest) returns (AppointmentResponse)`
+2. `GetAppointment(GetAppointmentRequest) returns (AppointmentResponse)`
+3. `ListAppointments(ListAppointmentsRequest) returns (ListAppointmentsResponse)`
+4. `UpdateAppointmentStatus(UpdateStatusRequest) returns (AppointmentResponse)`
 
-The use case depends only on interfaces. The HTTP client for the Doctor Service implements `DoctorServiceClient`, so it can be swapped for a mock in tests without touching business logic.
+## Business rules and gRPC errors
 
-## API Reference
+- `title` required -> `InvalidArgument`
+- `doctor_id` required -> `InvalidArgument`
+- doctor must exist remotely -> `FailedPrecondition`
+- doctor service unreachable -> `Unavailable`
+- appointment id not found -> `NotFound`
+- status must be one of `new/in_progress/done` -> `InvalidArgument`
+- transition `done -> new` forbidden -> `InvalidArgument`
 
-### Create an Appointment
+## Structure
 
-```
-POST /appointments
-```
-
-**Request**
-
-```json
-{
-  "title": "Initial cardiac consultation",
-  "description": "Patient referred for palpitations and shortness of breath",
-  "doctor_id": "3f1e2a4b-..."
-}
+```text
+cmd/appointment-service/main.go
+internal/model
+internal/usecase
+internal/repository
+internal/client              # Doctor service gRPC client implementation
+internal/transport/grpc
+internal/app
+proto/appointment.proto
+proto/appointment.pb.go
+proto/appointment_grpc.pb.go
 ```
 
-`title` and `doctor_id` are required. `description` is optional.
+Dependency flow:
 
-**Response `201 Created`**
+`transport/grpc` -> `usecase` (interface) <- `repository`  
+`usecase` -> `DoctorServiceClient` interface <- `internal/client`
 
-```json
-{
-  "ID": "9c2d...",
-  "Title": "Initial cardiac consultation",
-  "Description": "Patient referred for palpitations and shortness of breath",
-  "DoctorID": "3f1e2a4b-...",
-  "Status": "new",
-  "CreatedAt": "2026-04-03T10:00:00Z",
-  "UpdatedAt": "2026-04-03T10:00:00Z"
-}
-```
-
-**Error responses**
-
-| Status | Condition |
-|--------|-----------|
-| `400 Bad Request` | Missing `title` or `doctor_id` |
-| `404 Not Found` | Doctor does not exist in the Doctor Service |
-| `503 Service Unavailable` | Doctor Service is unreachable or timed out |
-
----
-
-### Get Appointment by ID
-
-```
-GET /appointments/:id
-```
-
-**Response `200 OK`** — appointment object as above.
-
-**Error responses**
-
-| Status | Condition |
-|--------|-----------|
-| `404 Not Found` | Appointment with the given ID does not exist |
-
----
-
-### List All Appointments
-
-```
-GET /appointments
-```
-
-**Response `200 OK`** — array of appointment objects.
-
----
-
-### Update Appointment Status
-
-```
-PATCH /appointments/:id/status
-```
-
-**Request**
-
-```json
-{ "status": "in_progress" }
-```
-
-Valid values: `new`, `in_progress`, `done`.
-
-**Response `200 OK`** — updated appointment object.
-
-**Error responses**
-
-| Status | Condition |
-|--------|-----------|
-| `400 Bad Request` | Invalid status value |
-| `404 Not Found` | Appointment not found |
-| `422 Unprocessable Entity` | Transitioning from `done` back to `new` |
-
-## Business Rules
-
-- `title` is required.
-- `doctor_id` is required, and the referenced doctor must exist in the Doctor Service (validated over REST).
-- `status` must be one of: `new`, `in_progress`, `done`.
-- Transitioning from `done` back to `new` is forbidden.
-- All business rules are enforced in the use case layer, not in the handler.
-
-## Failure Scenario
-
-When the Doctor Service is unavailable:
-
-1. The HTTP client times out after **5 seconds**.
-2. The use case receives the error and wraps it with the `SERVICE_UNAVAILABLE` prefix.
-3. The handler maps this to `HTTP 503` with a descriptive message.
-4. The failure is logged at `[ERROR]` level with the target URL and underlying error.
-
-The operation is never completed when the Doctor Service cannot be reached.
-
-**Where resilience patterns would be added in production:**
-
-- **Timeout**: already implemented (5s). Tune per SLA.
-- **Retries with exponential backoff**: for transient network failures where the Doctor Service is briefly unavailable.
-- **Circuit breaker**: to stop sending requests after repeated failures, preventing cascade overload and giving the Doctor Service time to recover.
-
-## Configuration
-
-| Environment Variable | Default | Description |
-|----------------------|---------|-------------|
-| `PORT` | `8081` | Port the service listens on |
-| `DOCTOR_SERVICE_URL` | `http://localhost:8080` | Base URL of the Doctor Service |
-
-## curl Examples
+## Regenerate stubs
 
 ```bash
-# Create an appointment (replace <doctor-id> with a real ID from the Doctor Service)
-curl -s -X POST http://localhost:8081/appointments \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Initial consultation","description":"Referred for palpitations","doctor_id":"<doctor-id>"}'
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+export PATH="$PATH:$(go env GOPATH)/bin"
 
-# Get an appointment by ID
-curl -s http://localhost:8081/appointments/<id>
-
-# List all appointments
-curl -s http://localhost:8081/appointments
-
-# Update status
-curl -s -X PATCH http://localhost:8081/appointments/<id>/status \
-  -H "Content-Type: application/json" \
-  -d '{"status":"in_progress"}'
+protoc --go_out=paths=source_relative:. \
+  --go-grpc_out=paths=source_relative:. \
+  proto/appointment.proto
 ```
+
+## Doctor service dependency wiring
+
+`appointment-service/go.mod` includes:
+- `require doctor-service v0.0.0`
+- `replace doctor-service => ../doctor-service`
+
+This allows importing Doctor proto stubs (`doctor-service/proto`) for the injected gRPC client without breaking use case dependency inversion.
