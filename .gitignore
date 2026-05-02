@@ -1,2 +1,5 @@
-.vscode
 .vscode/
+.idea/
+docs/ts1.md
+docs/ts2.md
+docs/grpcurl-commands.txt
