@@ -1,6 +1,8 @@
 package app
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -11,16 +13,51 @@ import (
 	"doctor-service/internal/usecase"
 	doctorpb "doctor-service/proto"
 
+	_ "github.com/lib/pq"
+
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+
+	"github.com/joho/godotenv"
 	"google.golang.org/grpc"
 )
 
 func Run() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("failed load .env data")
+	}
 	port := os.Getenv("DOCTOR_SERVICE_PORT")
 	if port == "" {
 		port = "8080"
 	}
+	dsn := os.Getenv("DB_DSN")
 
-	repo := repository.New()
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		log.Fatal("failed to init db, error: ", err)
+	}
+	defer db.Close()
+
+	if err := db.Ping(); err != nil {
+		log.Fatal("failed to ping database, error: ", err)
+	}
+
+	m, err := migrate.New("file://migrations", dsn)
+	if err != nil {
+		log.Fatal("failed at init migrate, error:", err)
+	}
+
+	if err := m.Up(); err != nil {
+		if errors.Is(err, migrate.ErrNoChange) {
+			log.Println("no change at migration")
+		} else {
+			log.Fatal("failed migrate up, error:", err)
+		}
+	}
+
+	repo := repository.New(db)
 	uc := usecase.New(repo)
 	h := grpcHandler.NewHandler(uc)
 
