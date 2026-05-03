@@ -2,6 +2,7 @@
 
 Owns appointment data and exposes `AppointmentService` gRPC API.
 Before create/update, it validates doctor existence by calling Doctor Service gRPC `GetDoctor`.
+Uses PostgreSQL for persistence and publishes appointment events to NATS.
 
 ## Run
 
@@ -11,7 +12,9 @@ go run ./cmd/appointment-service
 ```
 
 Default port: `8081` (`APPOINTMENT_SERVICE_PORT`)  
-Doctor target: `localhost:8080` (`DOCTOR_SERVICE_ADDR`)
+Doctor target: `localhost:8080` (`DOCTOR_SERVICE_ADDR`)  
+DB env: `DB_DSN`  
+Broker env: `NATS_URL` (default `nats://localhost:4222`)
 
 ## RPCs
 
@@ -31,6 +34,8 @@ Defined in `proto/appointment.proto`:
 - appointment id not found -> `NotFound`
 - status must be one of `new/in_progress/done` -> `InvalidArgument`
 - transition `done -> new` forbidden -> `InvalidArgument`
+- broker unavailable at startup -> service still starts, warning is logged
+- broker publish failure during RPC -> error is logged, RPC response is not affected
 
 ## Structure
 
