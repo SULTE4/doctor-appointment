@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"appointment-service/internal/client"
+	"appointment-service/internal/event"
 	"appointment-service/internal/repository"
 	grpcHandler "appointment-service/internal/transport/grpc"
 	"appointment-service/internal/usecase"
@@ -35,7 +36,7 @@ func Run() {
 	}
 	doctorServiceAddress := os.Getenv("DOCTOR_SERVICE_ADDR")
 	if doctorServiceAddress == "" {
-		log.Println("env with APPOINTMENT_SERVICE_PORT empty")
+		log.Println("env with DOCTOR_SERVICE_ADDR empty")
 		doctorServiceAddress = "localhost:8080"
 	}
 	dsn := os.Getenv("DB_DSN")
@@ -62,6 +63,25 @@ func Run() {
 		}
 	}
 
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		natsURL = "nats://localhost:4222"
+	}
+
+	publisher := usecase.EventPublisher(event.NewNoopPublisher(errors.New("event publisher is not configured")))
+	natsPublisher, err := event.NewNATSPublisher(natsURL)
+	if err != nil {
+		log.Printf("[WARN] broker unavailable at startup, service continues with best-effort publishing disabled: %v", err)
+		publisher = event.NewNoopPublisher(err)
+	} else {
+		publisher = natsPublisher
+		defer func() {
+			if closeErr := natsPublisher.Close(); closeErr != nil {
+				log.Printf("[WARN] failed to close NATS publisher: %v", closeErr)
+			}
+		}()
+	}
+
 	repo := repository.New(db)
 	dc, conn, err := client.NewDoctorServiceClient(doctorServiceAddress)
 	if err != nil {
@@ -69,7 +89,7 @@ func Run() {
 	}
 	defer conn.Close()
 
-	uc := usecase.New(repo, dc)
+	uc := usecase.New(repo, dc, publisher)
 	h := grpcHandler.NewHandler(uc)
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 
+	"doctor-service/internal/event"
 	"doctor-service/internal/repository"
 	grpcHandler "doctor-service/internal/transport/grpc"
 	"doctor-service/internal/usecase"
@@ -57,8 +58,27 @@ func Run() {
 		}
 	}
 
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		natsURL = "nats://localhost:4222"
+	}
+
+	publisher := usecase.EventPublisher(event.NewNoopPublisher(errors.New("event publisher is not configured")))
+	natsPublisher, err := event.NewNATSPublisher(natsURL)
+	if err != nil {
+		log.Printf("[WARN] broker unavailable at startup, service continues with best-effort publishing disabled: %v", err)
+		publisher = event.NewNoopPublisher(err)
+	} else {
+		publisher = natsPublisher
+		defer func() {
+			if closeErr := natsPublisher.Close(); closeErr != nil {
+				log.Printf("[WARN] failed to close NATS publisher: %v", closeErr)
+			}
+		}()
+	}
+
 	repo := repository.New(db)
-	uc := usecase.New(repo)
+	uc := usecase.New(repo, publisher)
 	h := grpcHandler.NewHandler(uc)
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
