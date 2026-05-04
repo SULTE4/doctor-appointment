@@ -10,12 +10,14 @@ import (
 )
 
 type doctorUsecase struct {
-	repo DoctorRepository
+	repo      DoctorRepository
+	publisher EventPublisher
 }
 
-func New(repo DoctorRepository) DoctorUsecase {
+func New(repo DoctorRepository, publisher EventPublisher) DoctorUsecase {
 	return &doctorUsecase{
-		repo: repo,
+		repo:      repo,
+		publisher: publisher,
 	}
 }
 
@@ -47,6 +49,10 @@ func (us *doctorUsecase) Create(fullName, specialization, email string) (*model.
 	if err := us.repo.Save(doctor); err != nil {
 		log.Printf("[ERROR] failed to save doctor %s: %v", doctor.ID, err)
 		return nil, err
+	}
+
+	if err := us.publisher.PublishDoctorCreated(doctor); err != nil {
+		log.Printf("[ERROR] failed to publish doctors.created event for doctor %s: %v", doctor.ID, err)
 	}
 
 	log.Printf("[INFO] doctor created: id=%s email=%s", doctor.ID, doctor.Email)

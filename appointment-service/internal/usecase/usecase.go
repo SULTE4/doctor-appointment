@@ -15,10 +15,15 @@ import (
 type appointmentUseCase struct {
 	repo         AppointmentRepository
 	doctorClient DoctorServiceClient
+	publisher    EventPublisher
 }
 
-func New(repo AppointmentRepository, dc DoctorServiceClient) AppointmentUseCase {
-	return &appointmentUseCase{repo: repo, doctorClient: dc}
+func New(repo AppointmentRepository, dc DoctorServiceClient, publisher EventPublisher) AppointmentUseCase {
+	return &appointmentUseCase{
+		repo:         repo,
+		doctorClient: dc,
+		publisher:    publisher,
+	}
 }
 
 func (uc *appointmentUseCase) Create(ctx context.Context, title, description, doctorID string) (*model.Appointment, error) {
@@ -53,6 +58,10 @@ func (uc *appointmentUseCase) Create(ctx context.Context, title, description, do
 	if err := uc.repo.Save(a); err != nil {
 		log.Printf("[ERROR] failed to save appointment %s: %v", a.ID, err)
 		return nil, err
+	}
+
+	if err := uc.publisher.PublishAppointmentCreated(a); err != nil {
+		log.Printf("[ERROR] failed to publish appointments.created event for appointment %s: %v", a.ID, err)
 	}
 
 	log.Printf("[INFO] appointment created: id=%s doctor_id=%s", a.ID, a.DoctorID)
@@ -104,12 +113,17 @@ func (uc *appointmentUseCase) UpdateStatus(ctx context.Context, id string, newSt
 		return nil, errors.New("DOCTOR_NOT_FOUND: doctor does not exist")
 	}
 
+	oldStatus := a.Status
 	a.Status = newStatus
 	a.UpdatedAt = time.Now()
 
 	if err := uc.repo.Update(a); err != nil {
 		log.Printf("[ERROR] failed to update appointment %s: %v", id, err)
 		return nil, err
+	}
+
+	if err := uc.publisher.PublishAppointmentStatusUpdated(a.ID, oldStatus, newStatus); err != nil {
+		log.Printf("[ERROR] failed to publish appointments.status_updated event for appointment %s: %v", a.ID, err)
 	}
 
 	log.Printf("[INFO] appointment %s status updated to %s", id, newStatus)

@@ -1,86 +1,70 @@
-# grpcurl demo commands (Assignment 2)
-
+# grpcurl demo commands (Assignment 3)
+#
 # Prerequisites:
 # 1) Start doctor-service on localhost:8080
 # 2) Start appointment-service on localhost:8081
-# 3) grpcurl installed
-
-# Shared flags
-# Use both proto roots because appointment-service uses doctor-service stubs at build time.
+# 3) Start notification-service (watch stdout logs)
+# 4) grpcurl installed
 
 # 1) Create doctor
 grpcurl -plaintext \
   -import-path doctor-service/proto \
-  -import-path appointment-service/proto \
   -proto doctor-service/proto/doctor.proto \
   -d '{"full_name":"Dr. Aisha Seitkali","specialization":"Cardiology","email":"a.seitkali@clinic.kz"}' \
   localhost:8080 doctor.DoctorService/CreateDoctor
 
-# 2) List doctors
-grpcurl -plaintext \
-  -import-path doctor-service/proto \
-  -proto doctor-service/proto/doctor.proto \
-  -d '{}' \
-  localhost:8080 doctor.DoctorService/ListDoctors
+# Expected notification log (example):
+# {"time":"2026-05-01T10:23:44Z","subject":"doctors.created","event":{"event_type":"doctors.created","occurred_at":"2026-05-01T10:23:44Z","id":"<doctor-id>","full_name":"Dr. Aisha Seitkali","specialization":"Cardiology","email":"a.seitkali@clinic.kz"}}
 
-# 3) Get doctor by id (replace <doctor-id>)
-grpcurl -plaintext \
-  -import-path doctor-service/proto \
-  -proto doctor-service/proto/doctor.proto \
-  -d '{"id":"<doctor-id>"}' \
-  localhost:8080 doctor.DoctorService/GetDoctor
-
-# 4) Create appointment (success, replace <doctor-id>)
+# 2) Create appointment (replace <doctor-id>)
 grpcurl -plaintext \
   -import-path appointment-service/proto \
   -proto appointment-service/proto/appointment.proto \
   -d '{"title":"Initial cardiac consultation","description":"Patient referred for palpitations","doctor_id":"<doctor-id>"}' \
   localhost:8081 appointment.AppointmentService/CreateAppointment
 
-# 5) Create appointment with missing doctor (FailedPrecondition)
-grpcurl -plaintext \
-  -import-path appointment-service/proto \
-  -proto appointment-service/proto/appointment.proto \
-  -d '{"title":"Invalid appointment","description":"doctor missing","doctor_id":"non-existing-doctor"}' \
-  localhost:8081 appointment.AppointmentService/CreateAppointment
+# Expected notification log (example):
+# {"time":"2026-05-01T10:24:01Z","subject":"appointments.created","event":{"event_type":"appointments.created","occurred_at":"2026-05-01T10:24:01Z","id":"<appointment-id>","title":"Initial cardiac consultation","doctor_id":"<doctor-id>","status":"new"}}
 
-# 6) List appointments
-grpcurl -plaintext \
-  -import-path appointment-service/proto \
-  -proto appointment-service/proto/appointment.proto \
-  -d '{}' \
-  localhost:8081 appointment.AppointmentService/ListAppointments
-
-# 7) Get appointment by id (replace <appointment-id>)
-grpcurl -plaintext \
-  -import-path appointment-service/proto \
-  -proto appointment-service/proto/appointment.proto \
-  -d '{"id":"<appointment-id>"}' \
-  localhost:8081 appointment.AppointmentService/GetAppointment
-
-# 8) Update appointment status (replace <appointment-id>)
+# 3) Update appointment status to in_progress (replace <appointment-id>)
 grpcurl -plaintext \
   -import-path appointment-service/proto \
   -proto appointment-service/proto/appointment.proto \
   -d '{"id":"<appointment-id>","status":"in_progress"}' \
   localhost:8081 appointment.AppointmentService/UpdateAppointmentStatus
 
-# 9) Invalid status transition done -> new (InvalidArgument)
-# Step A: set done
+# Expected notification log (example):
+# {"time":"2026-05-01T10:25:10Z","subject":"appointments.status_updated","event":{"event_type":"appointments.status_updated","occurred_at":"2026-05-01T10:25:10Z","id":"<appointment-id>","old_status":"new","new_status":"in_progress"}}
+
+# 4) Additional checks
+# Duplicate doctor email -> AlreadyExists
+grpcurl -plaintext \
+  -import-path doctor-service/proto \
+  -proto doctor-service/proto/doctor.proto \
+  -d '{"full_name":"Dr. Duplicate","specialization":"Cardiology","email":"a.seitkali@clinic.kz"}' \
+  localhost:8080 doctor.DoctorService/CreateDoctor
+
+# Missing doctor -> FailedPrecondition
+grpcurl -plaintext \
+  -import-path appointment-service/proto \
+  -proto appointment-service/proto/appointment.proto \
+  -d '{"title":"Invalid appointment","description":"doctor missing","doctor_id":"non-existing-doctor"}' \
+  localhost:8081 appointment.AppointmentService/CreateAppointment
+
+# Invalid transition done -> new
 grpcurl -plaintext \
   -import-path appointment-service/proto \
   -proto appointment-service/proto/appointment.proto \
   -d '{"id":"<appointment-id>","status":"done"}' \
   localhost:8081 appointment.AppointmentService/UpdateAppointmentStatus
-# Step B: try done -> new
 grpcurl -plaintext \
   -import-path appointment-service/proto \
   -proto appointment-service/proto/appointment.proto \
   -d '{"id":"<appointment-id>","status":"new"}' \
   localhost:8081 appointment.AppointmentService/UpdateAppointmentStatus
 
-# 10) Doctor service unavailable scenario
-# Stop doctor-service, then run:
+# Doctor service unavailable scenario:
+# stop doctor-service, then run:
 grpcurl -plaintext \
   -import-path appointment-service/proto \
   -proto appointment-service/proto/appointment.proto \

@@ -17,6 +17,11 @@ type DoctorServiceClient interface {
 	DoctorExists(ctx context.Context, doctorID string) (bool, error)
 }
 
+type EventPublisher interface {
+	PublishAppointmentCreated(a *model.Appointment) error
+	PublishAppointmentStatusUpdated(id string, oldStatus, newStatus model.Status) error
+}
+
 type AppointmentUseCase interface {
 	Create(ctx context.Context, title, description, doctorID string) (*model.Appointment, error)
 	GetByID(id string) (*model.Appointment, error)

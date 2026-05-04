@@ -66,7 +66,7 @@ func (r *DoctorRepo) GetByID(id string) (*model.Doctor, error) {
 	err := row.Scan(&doctor.ID, &doctor.FullName, &doctor.Specialization, &doctor.Email, &doctor.CreateAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
+			return nil, errors.New("doctor not found")
 		}
 		return nil, err
 	}

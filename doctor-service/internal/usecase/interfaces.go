@@ -8,6 +8,10 @@ type DoctorUsecase interface {
 	GetByID(id string) (*model.Doctor, error)
 }
 
+type EventPublisher interface {
+	PublishDoctorCreated(doctor *model.Doctor) error
+}
+
 type DoctorRepository interface {
 	Save(doctor *model.Doctor) error
 	GetAll() ([]*model.Doctor, error)

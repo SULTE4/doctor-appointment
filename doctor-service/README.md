@@ -1,6 +1,7 @@
 # Doctor Service (gRPC)
 
 Owns doctor profile data and exposes `DoctorService` gRPC API.
+Uses PostgreSQL for persistence and publishes `doctors.created` events to NATS.
 
 ## Run
 
@@ -10,6 +11,8 @@ go run ./cmd/doctor-service
 ```
 
 Default port: `8080` (`DOCTOR_SERVICE_PORT`).
+DB env: `DB_DSN`  
+Broker env: `NATS_URL` (default `nats://localhost:4222`)
 
 ## RPCs
 
@@ -26,6 +29,8 @@ Defined in `proto/doctor.proto`:
 - unique `email` -> `AlreadyExists`
 - doctor ID missing in get -> `InvalidArgument`
 - doctor ID not found -> `NotFound`
+- broker unavailable at startup -> service still starts, warning is logged
+- broker publish failure during RPC -> error is logged, RPC response is not affected
 
 ## Structure
 
