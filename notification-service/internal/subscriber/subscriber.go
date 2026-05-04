@@ -98,11 +98,7 @@ func (s *Subscriber) handleMessage(msg *nats.Msg) {
 		return
 	}
 
-	s.writeLog(map[string]any{
-		"time":    time.Now().UTC().Format(time.RFC3339),
-		"subject": msg.Subject,
-		"event":   event,
-	})
+	s.writeLog(event)
 }
 
 func (s *Subscriber) writeLog(entry map[string]any) {
