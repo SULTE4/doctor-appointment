@@ -14,13 +14,15 @@ import (
 
 type appointmentUseCase struct {
 	repo         AppointmentRepository
+	cache        CacheRepository
 	doctorClient DoctorServiceClient
 	publisher    EventPublisher
 }
 
-func New(repo AppointmentRepository, dc DoctorServiceClient, publisher EventPublisher) AppointmentUseCase {
+func New(repo AppointmentRepository, cache CacheRepository, dc DoctorServiceClient, publisher EventPublisher) AppointmentUseCase {
 	return &appointmentUseCase{
 		repo:         repo,
+		cache:        cache,
 		doctorClient: dc,
 		publisher:    publisher,
 	}
@@ -60,6 +62,10 @@ func (uc *appointmentUseCase) Create(ctx context.Context, title, description, do
 		return nil, err
 	}
 
+	if err := uc.cache.DeleteAppointmentsList(); err != nil {
+		log.Printf("[ERROR] failed to invalidate appointments list cache after create: %v", err)
+	}
+
 	if err := uc.publisher.PublishAppointmentCreated(a); err != nil {
 		log.Printf("[ERROR] failed to publish appointments.created event for appointment %s: %v", a.ID, err)
 	}
@@ -69,20 +75,42 @@ func (uc *appointmentUseCase) Create(ctx context.Context, title, description, do
 }
 
 func (uc *appointmentUseCase) GetByID(id string) (*model.Appointment, error) {
+	if cachedAppointment, hit, err := uc.cache.GetAppointment(id); err != nil {
+		log.Printf("[ERROR] failed to read appointment %s from cache: %v", id, err)
+	} else if hit {
+		return cachedAppointment, nil
+	}
+
 	a, err := uc.repo.GetByID(id)
 	if err != nil {
 		log.Printf("[WARN] appointment not found: id=%s", id)
 		return nil, err
 	}
+
+	if err := uc.cache.SetAppointment(a); err != nil {
+		log.Printf("[ERROR] failed to write appointment %s to cache: %v", id, err)
+	}
+
 	return a, nil
 }
 
 func (uc *appointmentUseCase) GetAll() ([]*model.Appointment, error) {
+	if cachedAppointments, hit, err := uc.cache.GetAppointmentsList(); err != nil {
+		log.Printf("[ERROR] failed to read appointments list from cache: %v", err)
+	} else if hit {
+		return cachedAppointments, nil
+	}
+
 	appointments, err := uc.repo.GetAll()
 	if err != nil {
 		log.Printf("[ERROR] failed to retrieve all appointments: %v", err)
 		return nil, err
 	}
+
+	if err := uc.cache.SetAppointmentsList(appointments); err != nil {
+		log.Printf("[ERROR] failed to write appointments list to cache: %v", err)
+	}
+
 	log.Printf("[INFO] retrieved %d appointments", len(appointments))
 	return appointments, nil
 }
@@ -122,7 +150,14 @@ func (uc *appointmentUseCase) UpdateStatus(ctx context.Context, id string, newSt
 		return nil, err
 	}
 
-	if err := uc.publisher.PublishAppointmentStatusUpdated(a.ID, oldStatus, newStatus); err != nil {
+	if err := uc.cache.SetAppointment(a); err != nil {
+		log.Printf("[ERROR] failed to update appointment %s cache entry: %v", id, err)
+	}
+	if err := uc.cache.DeleteAppointmentsList(); err != nil {
+		log.Printf("[ERROR] failed to invalidate appointments list cache after update: %v", err)
+	}
+
+	if err := uc.publisher.PublishAppointmentStatusUpdated(a.ID, a.DoctorID, oldStatus, newStatus); err != nil {
 		log.Printf("[ERROR] failed to publish appointments.status_updated event for appointment %s: %v", a.ID, err)
 	}
 

@@ -1,15 +1,20 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"strconv"
+	"time"
 
+	"appointment-service/internal/cache"
 	"appointment-service/internal/client"
 	"appointment-service/internal/event"
+	"appointment-service/internal/middleware"
 	"appointment-service/internal/repository"
 	grpcHandler "appointment-service/internal/transport/grpc"
 	"appointment-service/internal/usecase"
@@ -19,6 +24,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 
 	_ "github.com/lib/pq"
@@ -67,6 +73,35 @@ func Run() {
 	if natsURL == "" {
 		natsURL = "nats://localhost:4222"
 	}
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379"
+	}
+	cacheTTLSeconds := readIntEnv("CACHE_TTL_SECONDS", 60)
+	rateLimitRPM := readIntEnv("RATE_LIMIT_RPM", 100)
+
+	var redisClient *redis.Client
+	redisOpts, err := redis.ParseURL(redisURL)
+	if err != nil {
+		log.Printf("[WARN] failed to parse REDIS_URL (%s): %v", redisURL, err)
+	} else {
+		redisClient = redis.NewClient(redisOpts)
+
+		pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if pingErr := redisClient.Ping(pingCtx).Err(); pingErr != nil {
+			log.Printf("[WARN] redis unavailable at startup, continuing in degraded mode: %v", pingErr)
+			_ = redisClient.Close()
+			redisClient = nil
+		}
+	}
+	if redisClient != nil {
+		defer func() {
+			if closeErr := redisClient.Close(); closeErr != nil {
+				log.Printf("[WARN] failed to close redis client: %v", closeErr)
+			}
+		}()
+	}
 
 	publisher := usecase.EventPublisher(event.NewNoopPublisher(errors.New("event publisher is not configured")))
 	natsPublisher, err := event.NewNATSPublisher(natsURL)
@@ -89,7 +124,12 @@ func Run() {
 	}
 	defer conn.Close()
 
-	uc := usecase.New(repo, dc, publisher)
+	cacheRepo := usecase.CacheRepository(cache.NewNoop())
+	if redisClient != nil {
+		cacheRepo = cache.NewRedis(redisClient, cacheTTLSeconds)
+	}
+
+	uc := usecase.New(repo, cacheRepo, dc, publisher)
 	h := grpcHandler.NewHandler(uc)
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
@@ -97,11 +137,26 @@ func Run() {
 		log.Fatalf("[FATAL] failed to listen on :%s: %v", port, err)
 	}
 
-	server := grpc.NewServer()
+	server := grpc.NewServer(grpc.UnaryInterceptor(middleware.NewRedisRateLimiterInterceptor(redisClient, rateLimitRPM)))
 	appointmentpb.RegisterAppointmentServiceServer(server, h)
 
 	log.Printf("[INFO] Appointment Service gRPC listening on :%s", port)
 	if err := server.Serve(lis); err != nil {
 		log.Fatalf("[FATAL] failed to serve appointment gRPC server: %v", err)
 	}
+}
+
+func readIntEnv(key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		log.Printf("[WARN] invalid %s value %q, fallback to %d", key, raw, fallback)
+		return fallback
+	}
+
+	return value
 }

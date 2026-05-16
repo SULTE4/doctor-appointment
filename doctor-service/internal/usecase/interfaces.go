@@ -8,6 +8,14 @@ type DoctorUsecase interface {
 	GetByID(id string) (*model.Doctor, error)
 }
 
+type CacheRepository interface {
+	GetDoctor(id string) (*model.Doctor, bool, error)
+	SetDoctor(doctor *model.Doctor) error
+	GetDoctorsList() ([]*model.Doctor, bool, error)
+	SetDoctorsList(doctors []*model.Doctor) error
+	DeleteDoctorsList() error
+}
+
 type EventPublisher interface {
 	PublishDoctorCreated(doctor *model.Doctor) error
 }

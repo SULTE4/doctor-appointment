@@ -2,6 +2,7 @@
 
 Owns doctor profile data and exposes `DoctorService` gRPC API.
 Uses PostgreSQL for persistence and publishes `doctors.created` events to NATS.
+Uses Redis for cache-aside reads and interceptor-based rate limiting.
 
 ## Run
 
@@ -12,7 +13,10 @@ go run ./cmd/doctor-service
 
 Default port: `8080` (`DOCTOR_SERVICE_PORT`).
 DB env: `DB_DSN`  
-Broker env: `NATS_URL` (default `nats://localhost:4222`)
+Broker env: `NATS_URL` (default `nats://localhost:4222`)  
+Redis env: `REDIS_URL` (default `redis://localhost:6379`)  
+Cache TTL env: `CACHE_TTL_SECONDS` (default `60`)  
+Rate limit env: `RATE_LIMIT_RPM` (default `100`)
 
 ## RPCs
 
@@ -31,6 +35,9 @@ Defined in `proto/doctor.proto`:
 - doctor ID not found -> `NotFound`
 - broker unavailable at startup -> service still starts, warning is logged
 - broker publish failure during RPC -> error is logged, RPC response is not affected
+- redis unavailable at startup -> service still starts, cache/limit runs in degraded mode
+- read cache miss -> falls through to DB transparently
+- rate limit exceeded -> `ResourceExhausted`
 
 ## Structure
 
