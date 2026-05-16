@@ -29,6 +29,7 @@ type appointmentStatusUpdatedEvent struct {
 	EventType  string `json:"event_type"`
 	OccurredAt string `json:"occurred_at"`
 	ID         string `json:"id"`
+	DoctorID   string `json:"doctor_id"`
 	OldStatus  string `json:"old_status"`
 	NewStatus  string `json:"new_status"`
 }
@@ -65,11 +66,12 @@ func (p *NATSPublisher) PublishAppointmentCreated(a *model.Appointment) error {
 	return nil
 }
 
-func (p *NATSPublisher) PublishAppointmentStatusUpdated(id string, oldStatus, newStatus model.Status) error {
+func (p *NATSPublisher) PublishAppointmentStatusUpdated(id, doctorID string, oldStatus, newStatus model.Status) error {
 	payload := appointmentStatusUpdatedEvent{
 		EventType:  appointmentStatusUpdatedSubject,
 		OccurredAt: time.Now().UTC().Format(time.RFC3339),
 		ID:         id,
+		DoctorID:   doctorID,
 		OldStatus:  string(oldStatus),
 		NewStatus:  string(newStatus),
 	}
@@ -105,7 +107,7 @@ func (p *NoopPublisher) PublishAppointmentCreated(_ *model.Appointment) error {
 	return fmt.Errorf("appointment event publisher unavailable: %w", p.reason)
 }
 
-func (p *NoopPublisher) PublishAppointmentStatusUpdated(_ string, _ model.Status, _ model.Status) error {
+func (p *NoopPublisher) PublishAppointmentStatusUpdated(_ string, _ string, _ model.Status, _ model.Status) error {
 	return fmt.Errorf("appointment event publisher unavailable: %w", p.reason)
 }
 

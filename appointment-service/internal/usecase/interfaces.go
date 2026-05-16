@@ -17,9 +17,17 @@ type DoctorServiceClient interface {
 	DoctorExists(ctx context.Context, doctorID string) (bool, error)
 }
 
+type CacheRepository interface {
+	GetAppointment(id string) (*model.Appointment, bool, error)
+	SetAppointment(a *model.Appointment) error
+	GetAppointmentsList() ([]*model.Appointment, bool, error)
+	SetAppointmentsList(appointments []*model.Appointment) error
+	DeleteAppointmentsList() error
+}
+
 type EventPublisher interface {
 	PublishAppointmentCreated(a *model.Appointment) error
-	PublishAppointmentStatusUpdated(id string, oldStatus, newStatus model.Status) error
+	PublishAppointmentStatusUpdated(id, doctorID string, oldStatus, newStatus model.Status) error
 }
 
 type AppointmentUseCase interface {

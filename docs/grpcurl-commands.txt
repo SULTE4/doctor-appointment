@@ -1,10 +1,11 @@
-# grpcurl demo commands (Assignment 3)
+# grpcurl demo commands (Assignment 4)
 #
 # Prerequisites:
-# 1) Start doctor-service on localhost:8080
-# 2) Start appointment-service on localhost:8081
-# 3) Start notification-service (watch stdout logs)
-# 4) grpcurl installed
+# 1) doctor-service running on :8080
+# 2) appointment-service running on :8081
+# 3) notification-service running
+# 4) mock-gateway running on :8090 (HTTP)
+# 5) Redis running on :6379 (optional redis-cli MONITOR for cache proof)
 
 # 1) Create doctor
 grpcurl -plaintext \
@@ -13,60 +14,72 @@ grpcurl -plaintext \
   -d '{"full_name":"Dr. Aisha Seitkali","specialization":"Cardiology","email":"a.seitkali@clinic.kz"}' \
   localhost:8080 doctor.DoctorService/CreateDoctor
 
-# Expected notification log (example):
-# {"time":"2026-05-01T10:23:44Z","subject":"doctors.created","event":{"event_type":"doctors.created","occurred_at":"2026-05-01T10:23:44Z","id":"<doctor-id>","full_name":"Dr. Aisha Seitkali","specialization":"Cardiology","email":"a.seitkali@clinic.kz"}}
+# 2) Get doctor twice (cache-hit checkpoint)
+# First call: cache miss -> DB -> cache set
+grpcurl -plaintext \
+  -import-path doctor-service/proto \
+  -proto doctor-service/proto/doctor.proto \
+  -d '{"id":"<doctor-id>"}' \
+  localhost:8080 doctor.DoctorService/GetDoctor
+# Second call: should be served from cache
+grpcurl -plaintext \
+  -import-path doctor-service/proto \
+  -proto doctor-service/proto/doctor.proto \
+  -d '{"id":"<doctor-id>"}' \
+  localhost:8080 doctor.DoctorService/GetDoctor
 
-# 2) Create appointment (replace <doctor-id>)
+# 3) Create appointment
 grpcurl -plaintext \
   -import-path appointment-service/proto \
   -proto appointment-service/proto/appointment.proto \
   -d '{"title":"Initial cardiac consultation","description":"Patient referred for palpitations","doctor_id":"<doctor-id>"}' \
   localhost:8081 appointment.AppointmentService/CreateAppointment
 
-# Expected notification log (example):
-# {"time":"2026-05-01T10:24:01Z","subject":"appointments.created","event":{"event_type":"appointments.created","occurred_at":"2026-05-01T10:24:01Z","id":"<appointment-id>","title":"Initial cardiac consultation","doctor_id":"<doctor-id>","status":"new"}}
-
-# 3) Update appointment status to in_progress (replace <appointment-id>)
-grpcurl -plaintext \
-  -import-path appointment-service/proto \
-  -proto appointment-service/proto/appointment.proto \
-  -d '{"id":"<appointment-id>","status":"in_progress"}' \
-  localhost:8081 appointment.AppointmentService/UpdateAppointmentStatus
-
-# Expected notification log (example):
-# {"time":"2026-05-01T10:25:10Z","subject":"appointments.status_updated","event":{"event_type":"appointments.status_updated","occurred_at":"2026-05-01T10:25:10Z","id":"<appointment-id>","old_status":"new","new_status":"in_progress"}}
-
-# 4) Additional checks
-# Duplicate doctor email -> AlreadyExists
-grpcurl -plaintext \
-  -import-path doctor-service/proto \
-  -proto doctor-service/proto/doctor.proto \
-  -d '{"full_name":"Dr. Duplicate","specialization":"Cardiology","email":"a.seitkali@clinic.kz"}' \
-  localhost:8080 doctor.DoctorService/CreateDoctor
-
-# Missing doctor -> FailedPrecondition
-grpcurl -plaintext \
-  -import-path appointment-service/proto \
-  -proto appointment-service/proto/appointment.proto \
-  -d '{"title":"Invalid appointment","description":"doctor missing","doctor_id":"non-existing-doctor"}' \
-  localhost:8081 appointment.AppointmentService/CreateAppointment
-
-# Invalid transition done -> new
+# 4) Update appointment to done (job queue checkpoint)
 grpcurl -plaintext \
   -import-path appointment-service/proto \
   -proto appointment-service/proto/appointment.proto \
   -d '{"id":"<appointment-id>","status":"done"}' \
   localhost:8081 appointment.AppointmentService/UpdateAppointmentStatus
-grpcurl -plaintext \
-  -import-path appointment-service/proto \
-  -proto appointment-service/proto/appointment.proto \
-  -d '{"id":"<appointment-id>","status":"new"}' \
-  localhost:8081 appointment.AppointmentService/UpdateAppointmentStatus
 
-# Doctor service unavailable scenario:
-# stop doctor-service, then run:
+# Expected Notification logs:
+# - event log with subject appointments.status_updated
+# - job logs: processing -> success
+#   (or processing -> retry -> success if gateway returned random 503)
+#
+# Expected Mock Gateway log:
+# - one POST /notify request JSON
+
+# 5) Rate limiter checkpoint (send > RATE_LIMIT_RPM requests/minute)
+# Example burst loop:
+for i in $(seq 1 120); do
+  grpcurl -plaintext \
+    -import-path doctor-service/proto \
+    -proto doctor-service/proto/doctor.proto \
+    -d '{"id":"<doctor-id>"}' \
+    localhost:8080 doctor.DoctorService/GetDoctor >/dev/null 2>&1
+done
+# Expected: some requests return ResourceExhausted
+
+# 6) Idempotency checkpoint (replay same done event to broker)
+# Requires NATS CLI installed:
+# nats pub appointments.status_updated '{"event_type":"appointments.status_updated","occurred_at":"<same-occurred-at>","id":"<same-appointment-id>","doctor_id":"<same-doctor-id>","old_status":"in_progress","new_status":"done"}'
+#
+# Expected:
+# - event log appears
+# - queue logs duplicate/drop behavior
+# - no second gateway delivery for same idempotency key
+
+# 7) Dead-letter checkpoint
+# Stop mock-gateway, then trigger another done update:
 grpcurl -plaintext \
   -import-path appointment-service/proto \
   -proto appointment-service/proto/appointment.proto \
-  -d '{"title":"Doctor down test","description":"expect unavailable","doctor_id":"any-id"}' \
-  localhost:8081 appointment.AppointmentService/CreateAppointment
+  -d '{"id":"<appointment-id-2>","status":"done"}' \
+  localhost:8081 appointment.AppointmentService/UpdateAppointmentStatus
+#
+# Expected Notification logs:
+# - retry attempt 1
+# - retry attempt 2
+# - retry attempt 3
+# - dead_letter entry to stderr

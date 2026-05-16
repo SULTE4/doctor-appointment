@@ -1,22 +1,19 @@
 package subscriber
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
 )
 
-type Subscriber struct {
-	nc   *nats.Conn
-	subs []*nats.Subscription
+type MessageHandler func(subject string, payload []byte)
 
-	mu  sync.Mutex
-	enc *json.Encoder
+type Subscriber struct {
+	nc      *nats.Conn
+	subs    []*nats.Subscription
+	handler MessageHandler
 }
 
 func ConnectWithRetry(url string, maxAttempts int, initialBackoff time.Duration) (*nats.Conn, error) {
@@ -50,14 +47,17 @@ func ConnectWithRetry(url string, maxAttempts int, initialBackoff time.Duration)
 	return nil, fmt.Errorf("failed to connect to broker at %s after %d attempts: %w", url, maxAttempts, lastErr)
 }
 
-func New(nc *nats.Conn) (*Subscriber, error) {
+func New(nc *nats.Conn, handler MessageHandler) (*Subscriber, error) {
 	if nc == nil {
 		return nil, fmt.Errorf("nats connection is nil")
 	}
+	if handler == nil {
+		return nil, fmt.Errorf("message handler is nil")
+	}
 
 	return &Subscriber{
-		nc:  nc,
-		enc: json.NewEncoder(os.Stdout),
+		nc:      nc,
+		handler: handler,
 	}, nil
 }
 
@@ -87,25 +87,5 @@ func (s *Subscriber) Drain() error {
 }
 
 func (s *Subscriber) handleMessage(msg *nats.Msg) {
-	var event map[string]any
-	if err := json.Unmarshal(msg.Data, &event); err != nil {
-		s.writeLog(map[string]any{
-			"time":    time.Now().UTC().Format(time.RFC3339),
-			"subject": msg.Subject,
-			"error":   fmt.Sprintf("failed to deserialize payload: %v", err),
-			"raw":     string(msg.Data),
-		})
-		return
-	}
-
-	s.writeLog(event)
-}
-
-func (s *Subscriber) writeLog(entry map[string]any) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if err := s.enc.Encode(entry); err != nil {
-		log.Printf("[ERROR] failed to write log output: %v", err)
-	}
+	s.handler(msg.Subject, msg.Data)
 }

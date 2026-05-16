@@ -3,6 +3,7 @@
 Owns appointment data and exposes `AppointmentService` gRPC API.
 Before create/update, it validates doctor existence by calling Doctor Service gRPC `GetDoctor`.
 Uses PostgreSQL for persistence and publishes appointment events to NATS.
+Uses Redis for cache-aside reads and interceptor-based rate limiting.
 
 ## Run
 
@@ -14,7 +15,10 @@ go run ./cmd/appointment-service
 Default port: `8081` (`APPOINTMENT_SERVICE_PORT`)  
 Doctor target: `localhost:8080` (`DOCTOR_SERVICE_ADDR`)  
 DB env: `DB_DSN`  
-Broker env: `NATS_URL` (default `nats://localhost:4222`)
+Broker env: `NATS_URL` (default `nats://localhost:4222`)  
+Redis env: `REDIS_URL` (default `redis://localhost:6379`)  
+Cache TTL env: `CACHE_TTL_SECONDS` (default `60`)  
+Rate limit env: `RATE_LIMIT_RPM` (default `100`)
 
 ## RPCs
 
@@ -36,6 +40,9 @@ Defined in `proto/appointment.proto`:
 - transition `done -> new` forbidden -> `InvalidArgument`
 - broker unavailable at startup -> service still starts, warning is logged
 - broker publish failure during RPC -> error is logged, RPC response is not affected
+- redis unavailable at startup -> service still starts, cache/limit runs in degraded mode
+- read cache miss -> falls through to DB transparently
+- rate limit exceeded -> `ResourceExhausted`
 
 ## Structure
 
